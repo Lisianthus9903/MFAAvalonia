@@ -1,8 +1,10 @@
 name: Korean Build (fork)
 
-# Fork-only workflow for the ko-KR build.
-# - workflow_dispatch: build Windows x64/arm64 and upload zip artifacts.
-# - push tag ko-v*:   same, then create a GitHub release in this fork.
+# Fork-only workflow for the ko-KR build (private repository).
+# - workflow_dispatch: build and verify Windows x64 only. Nothing is uploaded
+#   (Actions artifact storage quota on private repositories).
+# - push tag ko-v*:   create the release first, then attach the zip directly.
+# x64 only: hosted ARM64 runners are not available for private repos on Free.
 # No secrets and no external upload (MirrorChyan etc.) are used.
 
 on:
@@ -15,14 +17,29 @@ permissions:
   contents: write
 
 jobs:
+  release:
+    name: Create Release
+    if: ${{ startsWith(github.ref, 'refs/tags/ko-v') && github.repository_owner != 'SweetSmellFox' && github.repository_owner != 'MaaXYZ' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Create Release
+        uses: softprops/action-gh-release@da05d552573ad5aba039eaac05058a918a7bf631
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: ${{ github.ref_name }}
+          draft: false
+          prerelease: ${{ contains(github.ref_name, '-beta') || contains(github.ref_name, '-rc') || contains(github.ref_name, '-alpha') }}
+          generate_release_notes: true
+
   build:
     name: Build (win-${{ matrix.arch }})
-    if: ${{ github.repository_owner != 'SweetSmellFox' && github.repository_owner != 'MaaXYZ' }}
+    needs: [ release ]
+    if: ${{ !cancelled() && needs.release.result != 'failure' && github.repository_owner != 'SweetSmellFox' && github.repository_owner != 'MaaXYZ' }}
     runs-on: windows-latest
     strategy:
       fail-fast: false
       matrix:
-        arch: [ x64, arm64 ]
+        arch: [ x64 ]
 
     steps:
       - name: Checkout Code
@@ -69,31 +86,10 @@ jobs:
           cd "$BUILD_DIR"
           7z a -tzip "../$OUTPUT_FILE" *
 
-      - name: Upload ZIP Artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: win-${{ matrix.arch }}
-          path: bin/AnyCPU/Release/win-${{ matrix.arch }}/*.zip
-          if-no-files-found: error
-
-  release:
-    name: Create Release
-    if: ${{ startsWith(github.ref, 'refs/tags/ko-v') }}
-    needs: [ build ]
-    runs-on: ubuntu-latest
-    steps:
-      - name: Download Artifacts
-        uses: actions/download-artifact@v4
-        with:
-          path: artifacts
-          merge-multiple: true
-
-      - name: Create Release
-        uses: softprops/action-gh-release@da05d552573ad5aba039eaac05058a918a7bf631
-        with:
-          tag_name: ${{ github.ref_name }}
-          name: ${{ github.ref_name }}
-          files: artifacts/*.zip
-          draft: false
-          prerelease: ${{ contains(github.ref_name, '-beta') || contains(github.ref_name, '-rc') || contains(github.ref_name, '-alpha') }}
-          generate_release_notes: true
+      - name: Attach ZIP to release
+        if: ${{ startsWith(github.ref, 'refs/tags/ko-v') }}
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release upload "${{ github.ref_name }}"             "bin/AnyCPU/Release/win-${{ matrix.arch }}/MFAAvalonia-${{ steps.meta.outputs.tag }}-win-${{ matrix.arch }}.zip"             --repo "${{ github.repository }}" --clobber
