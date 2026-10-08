@@ -1674,10 +1674,8 @@ public class MaaProcessor
         try
         {
             var preTaskExecuted = await RunPreTasksAsync(token);
-            var shouldRefreshWin32Window = ViewModel is { CurrentController: MaaControllerTypes.Win32, CurrentDevice: not null }
-                && !ViewModel.IsCurrentWin32WindowValid();
-            if (ViewModel?.CurrentController != MaaControllerTypes.PlayCover
-                && ((preTaskExecuted && ViewModel?.CurrentDevice == null) || shouldRefreshWin32Window))
+            if (ViewModel?.CurrentController is not (MaaControllerTypes.PlayCover or MaaControllerTypes.Win32)
+                && preTaskExecuted && ViewModel?.CurrentDevice == null)
             {
                 await Task.Run(() => ViewModel.AutoDetectDevice(token, showToast: false), token);
             }
@@ -1689,6 +1687,14 @@ public class MaaProcessor
             AddLog($"pretask failed: {ex.Message}", Brushes.OrangeRed, changeColor: false);
             return (null, true, false);
         }
+
+        if (!await EnsureWin32WindowReadyAsync(token))
+        {
+            LoggerHelper.Warning("未找到可连接的 Win32 目标窗口，保留窗口匹配设置以便下次重新发现。");
+            AddLog(LangKeys.NoWindowFound.ToLocalization(), Brushes.OrangeRed, changeColor: false);
+            return (null, false, true);
+        }
+
         MaaResource maaResource = null;
         try
         {
@@ -2368,6 +2374,11 @@ public class MaaProcessor
 
             case MaaControllerTypes.Win32:
             default:
+                // A window can disappear between discovery and controller creation.
+                // Never pass an empty handle to the native controller constructor.
+                if (Config.DesktopWindow.HWnd == IntPtr.Zero)
+                    throw new MaaException(LangKeys.NoWindowFound.ToLocalization());
+
                 if (logConfig)
                 {
                     LoggerHelper.Info($"窗口名称：{Config.DesktopWindow.Name}");
@@ -3380,14 +3391,8 @@ public class MaaProcessor
         Interlocked.Exchange(ref _isConnecting, 1);
         try
         {
-            if (ViewModel is { CurrentController: MaaControllerTypes.Win32, CurrentDevice: not null }
-                && !ViewModel.IsCurrentWin32WindowValid())
-            {
-                LoggerHelper.Info("检测到 Win32 目标窗口已失效，释放旧控制器并重新发现窗口。");
-                ViewModel.InvalidateCurrentWin32Window();
-                SetTasker();
-                await Task.Run(() => ViewModel.AutoDetectDevice(showToast: false));
-            }
+            if (!await EnsureWin32WindowReadyAsync(CancellationToken.None))
+                return;
 
             await GetTaskerAsync();
             var task = MaaTasker?.Controller?.LinkStart();
@@ -4055,6 +4060,27 @@ public class MaaProcessor
         }, token: token, name: "截图测试");
     }
 
+    private Task<bool> EnsureWin32WindowReadyAsync(CancellationToken token)
+    {
+        var viewModel = ViewModel;
+        if (viewModel?.CurrentController != MaaControllerTypes.Win32)
+            return Task.FromResult(true);
+
+        var allowDiscovery = viewModel.CurrentDevice != null
+            || InstanceConfiguration.GetValue(ConfigurationKeys.AutoDetectOnConnectionFailed, true);
+        return Win32TargetRecovery.EnsureReadyAsync(
+            viewModel.IsCurrentWin32WindowValid,
+            () =>
+            {
+                LoggerHelper.Info("Win32 目标窗口缺失或已失效，释放旧控制器并重新发现窗口。");
+                viewModel.InvalidateCurrentWin32Window();
+                SetTasker();
+            },
+            cancellation => Task.Run(() => viewModel.AutoDetectDevice(cancellation, showToast: false), cancellation),
+            allowDiscovery,
+            token);
+    }
+
     async private Task HandleDeviceConnectionAsync(CancellationToken token, bool showMessage = true)
     {
         await _connectionGate.WaitAsync(token);
@@ -4066,14 +4092,7 @@ public class MaaProcessor
         try
         {
             var controllerType = ViewModel?.CurrentController ?? MaaControllerTypes.Adb;
-            if (controllerType == MaaControllerTypes.Win32
-                && ViewModel is { CurrentDevice: not null }
-                && !ViewModel.IsCurrentWin32WindowValid())
-            {
-                LoggerHelper.Info("检测到 Win32 目标窗口已失效，释放旧控制器并重新发现窗口。");
-                ViewModel.InvalidateCurrentWin32Window();
-                SetTasker();
-            }
+            await EnsureWin32WindowReadyAsync(token);
 
             if (ViewModel?.IsConnected == true && MaaTasker?.Controller?.IsConnected == true)
             {
@@ -4101,7 +4120,7 @@ public class MaaProcessor
                 _ => LangKeys.Window
             };
             var beforeTask = InstanceConfiguration.GetValue(ConfigurationKeys.BeforeTask, "None");
-            var delayFingerprintMatching = beforeTask.Contains("StartupSoftware", StringComparison.OrdinalIgnoreCase);
+            var delayFingerprintMatching = isAdb && beforeTask.Contains("StartupSoftware", StringComparison.OrdinalIgnoreCase);
 
             if (showMessage)
                 AddLogByKey(LangKeys.ConnectingTo, (IBrush?)null, true, true, targetKey);
@@ -4113,18 +4132,7 @@ public class MaaProcessor
                 await EnsureAdbTargetReadyAsync(token, showMessage, delayFingerprintMatching);
             }
 
-            // A Win32 HWND is only valid for the lifetime of its window. If the
-            // selected window was closed and recreated, rediscover it before
-            // creating a controller instead of passing the stale handle on.
-            if (controllerType == MaaControllerTypes.Win32
-                && ViewModel is { CurrentDevice: not null }
-                && !ViewModel.IsCurrentWin32WindowValid())
-            {
-                ViewModel.InvalidateCurrentWin32Window();
-                await Task.Run(() => ViewModel.AutoDetectDevice(token, showToast: false), token);
-            }
-
-            if (!isPlatformController && !isPlayCover && ViewModel?.CurrentDevice == null && InstanceConfiguration.GetValue(ConfigurationKeys.AutoDetectOnConnectionFailed, true) && !delayFingerprintMatching)
+            if (!isPlatformController && !isPlayCover && controllerType != MaaControllerTypes.Win32 && ViewModel?.CurrentDevice == null && InstanceConfiguration.GetValue(ConfigurationKeys.AutoDetectOnConnectionFailed, true) && !delayFingerprintMatching)
                 ViewModel?.TryReadAdbDeviceFromConfig(false, true, true, false, strictRecoveryTarget);
 
             var tuple = await TryConnectAsync(token);
@@ -4137,7 +4145,7 @@ public class MaaProcessor
             }
             else if (!connected && controllerType == MaaControllerTypes.Win32 && !tuple.Item2 && shouldRetry)
             {
-                await RetryConnectionAsync(CancellationToken.None, showMessage, StartSoftware, LangKeys.TryToStartGame,
+                connected = await RetryConnectionAsync(token, showMessage, StartSoftware, LangKeys.TryToStartGame,
                     InstanceConfiguration.GetValue(ConfigurationKeys.RetryOnDisconnectedWin32, false),
                     () =>
                     {
@@ -4448,6 +4456,13 @@ public class MaaProcessor
             LoggerHelper.Info("停止前状态：" + Status);
             if (Status == MFATask.MFATaskStatus.STOPPING)
                 return Task.CompletedTask;
+
+            if (!ShouldProcessStop(finished))
+            {
+                TaskQueue.Clear();
+                return Task.CompletedTask;
+            }
+
             Status = MFATask.MFATaskStatus.STOPPING;
             ViewModel?.SetAdbRecoverySelectionLock(false);
             DispatcherHelper.PostOnMainThread(() =>
@@ -4458,19 +4473,13 @@ public class MaaProcessor
             {
                 var isUpdateRelated = TaskQueue.Any(task => task.IsUpdateRelated);
                 ViewModel?.SetCurrentTaskName(string.Empty);
-                if (!ShouldProcessStop(finished))
-                {
-                    ToastHelper.Warn(LangKeys.NoTaskToStop.ToLocalization());
-
-                    TaskQueue.Clear();
-                    return Task.CompletedTask;
-                }
-
                 CancelOperations(status == MFATask.MFATaskStatus.STOPPED && !_agentStarted && _agentContexts.Count > 0);
 
                 TaskQueue.Clear();
 
-                ExecuteStopCore(finished, async () =>
+                // Return the complete stop task to the command loop. An async-void
+                // callback lets a following start reuse a controller still stopping.
+                return ExecuteStopCore(finished, async () =>
                 {
                     var stopResult = MaaJobStatus.Succeeded;
 
@@ -4495,10 +4504,8 @@ public class MaaProcessor
 
                     }
                     HandleStopResult(status, stopResult, onlyStart, queueCompleted, action, isUpdateRelated);
-                    DispatcherHelper.PostOnMainThread(() =>
-                    {
-                        if (ViewModel != null) ViewModel.ToggleEnable = true;
-                    });
+                    if (Status == MFATask.MFATaskStatus.STOPPING)
+                        Status = status;
                 });
             }
             catch (Exception ex)
@@ -4533,16 +4540,26 @@ public class MaaProcessor
             || finished;
     }
 
-    private void ExecuteStopCore(bool finished, Action stopAction)
+    private async Task ExecuteStopCore(bool finished, Func<Task> stopAction)
     {
-        TaskManager.RunTaskAsync(() =>
+        try
         {
             if (!finished) DispatcherHelper.PostOnMainThread(() => AddLogByKey(LangKeys.Stopping, (IBrush?)null));
 
-            stopAction.Invoke();
-
-            DispatcherHelper.PostOnMainThread(() => Instances.RootViewModel.Idle = true);
-        }, null, "停止maafw任务");
+            await TaskManager.RunTaskAsync(stopAction, name: "停止maafw任务", catchException: false);
+        }
+        catch (Exception ex)
+        {
+            HandleStopException(ex);
+        }
+        finally
+        {
+            DispatcherHelper.PostOnMainThread(() =>
+            {
+                if (ViewModel != null) ViewModel.ToggleEnable = true;
+                Instances.RootViewModel.Idle = true;
+            });
+        }
     }
 
     private MaaJobStatus AbortCurrentTasker()

@@ -162,7 +162,10 @@ public static class AdminHelper
                 WorkingDirectory = AppContext.BaseDirectory
             };
 
-            var process = Process.Start(startInfo);
+            // Keep the current instance protected if the user cancels UAC.
+            // The replacement waits before opening the same mutex/pipe.
+            RestartHandoff.AddParentArgument(startInfo);
+            using var process = Process.Start(startInfo);
             return process != null;
         }
         catch (Exception ex)

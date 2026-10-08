@@ -47,6 +47,7 @@ sealed class Program
         try
         {
             var executablePath = Environment.ProcessPath ?? Path.Combine(AppContext.BaseDirectory, "MFAAvalonia.exe");
+            args = RestartHandoff.WaitForParentExit(args, executablePath);
             var instanceKey = AppRuntime.CreateInstanceKey(executablePath);
             AppRuntime.Initialize(args, instanceKey);
             TelemetryService.InitializeBootstrapFromInterface(AppContext.BaseDirectory);
