@@ -122,9 +122,11 @@ internal static class Program
                 Check(stopDone && started && Ready(), "stop and restart finish with a usable window " + i);
             }
 
+            var agentServerChecks = RunAgentChecks(processor, hwnd);
+
             var report = new { passed = Passed.Count, checks = Passed,
                 nativeVersion = NativeBindingContext.LibraryVersion, gameInput = false,
-                fixtureOnly = true, source = typeof(MaaProcessor).Assembly.Location };
+                fixtureOnly = true, agentServerChecks, source = typeof(MaaProcessor).Assembly.Location };
             var json = JsonSerializer.Serialize(report, new JsonSerializerOptions { WriteIndented = true });
             if (args.Length > 0) File.WriteAllText(args[0], json);
             Console.WriteLine(json);
@@ -134,6 +136,133 @@ internal static class Program
         {
             DestroyFixture(ref hwnd);
         }
+    }
+
+    // Agent session reuse after a manual stop. The production decision is driven by a real
+    // MaaAgentClient linked to a real Python AgentServer process (agent/main.py's start-up
+    // sequence) and a Win32 controller on the off-screen fixture. No game input or GUI.
+    private const string AgentScript = """
+        import sys
+        from maa.agent.agent_server import AgentServer
+        AgentServer.start_up(sys.argv[-1])
+        AgentServer.join()
+        AgentServer.shut_down()
+        """;
+
+    private static bool RunAgentChecks(object processor, IntPtr hwnd)
+    {
+        var configs = new List<MaaInterface.MaaInterfaceAgent> { new() { ChildExec = "python" } };
+        var empty = new List<AgentContext>();
+        Check(AgentHelper.IsAgentSessionReusable(null, false, empty, out _), "no Agent configuration never forces a restart");
+        Check(!AgentHelper.IsAgentSessionReusable(configs, false, empty, out _), "an Agent that was never started is not reused");
+        Check(!AgentHelper.IsAgentSessionReusable(configs, true, empty, out _), "a started flag without Agent contexts is not reused");
+        Check(!AgentHelper.IsAgentSessionReusable(configs, true, [new AgentContext()], out _), "a released AgentClient is not reused");
+
+        var python = Environment.GetEnvironmentVariable("MFA_TEST_AGENT_PYTHON")
+                     ?? @"D:\AI_Workspaces\Claude\MaaStellaSora_KR\python\python.exe";
+        if (!File.Exists(python))
+        {
+            Console.Error.WriteLine($"Agent server checks skipped: {python} not found (set MFA_TEST_AGENT_PYTHON).");
+            return false;
+        }
+
+        var dir = Directory.CreateTempSubdirectory("mfa-agent-tests-").FullName;
+        var script = Path.Combine(dir, "agent_probe.py");
+        File.WriteAllText(script, AgentScript);
+        var processorType = typeof(MaaProcessor);
+        var interfaceProperty = processorType.GetProperty("Interface", BindingFlags.Static | BindingFlags.Public)!;
+        var previousInterface = interfaceProperty.GetValue(null);
+        var contextsField = processorType.GetField("_agentContexts", BindingFlags.Instance | BindingFlags.NonPublic)!;
+        var startedField = processorType.GetField("_agentStarted", BindingFlags.Instance | BindingFlags.NonPublic)!;
+        var sessionAlive = processorType.GetMethod("IsAgentSessionAlive", BindingFlags.Instance | BindingFlags.NonPublic)!
+            .CreateDelegate<Func<bool>>(processor);
+        var controller = CreateController(hwnd);
+        var resource = new MaaResource();
+        var tasker = new MaaTasker
+        {
+            Controller = controller,
+            Resource = resource,
+            DisposeOptions = DisposeOptions.All,
+        };
+        tasker.Controller.LinkStart().Wait();
+        var contexts = new List<AgentContext>();
+        try
+        {
+            interfaceProperty.SetValue(null, new MaaInterface { Agent = configs });
+            contextsField.SetValue(processor, contexts);
+            startedField.SetValue(processor, true);
+
+            // 1. Normal consecutive runs keep reusing a healthy Agent.
+            contexts.Add(StartAgent(tasker, python, script, dir));
+            Check(sessionAlive() && sessionAlive(), "a live Agent process with a connected client is reused across starts");
+
+            // 2. The reported case: the tasker stays idle after a stop while the live view keeps
+            //    screencapping. Controller events are sent fire-and-forget and their responses are
+            //    only drained inside a running task, so the IPC pipe fills up and the client reports
+            //    "server is not alive" although the Python process is still running.
+            var agentProcess = contexts[0].Process!;
+            var deadline = DateTime.UtcNow.AddSeconds(90);
+            var screencaps = 0;
+            while (contexts[0].Client!.IsAlive && DateTime.UtcNow < deadline)
+            {
+                tasker.Controller.Screencap().Wait();
+                screencaps++;
+            }
+            Console.Error.WriteLine($"idle screencaps until the Agent link stalled: {screencaps}");
+            Check(!agentProcess.HasExited && !sessionAlive(),
+                "idle screencaps stall the Agent link and force a restart although its process still runs");
+            // KillAllAgents disposes the context's Process object, so observe exit through a separate handle.
+            using var observer = System.Diagnostics.Process.GetProcessById(agentProcess.Id);
+            Check(BoundedCleanup(contexts) && observer.WaitForExit(5000),
+                "cleanup of a stalled Agent terminates its process without hanging");
+
+            // 3. The Agent process itself died while the controller stayed connected.
+            contexts.Add(StartAgent(tasker, python, script, dir));
+            Check(sessionAlive(), "a newly started Agent is reused again");
+            agentProcess = contexts[0].Process!;
+            agentProcess.Kill(true);
+            agentProcess.WaitForExit(5000);
+            Check(!AgentHelper.IsAgentSessionReusable(configs, true, contexts, out var reason) && reason.Contains("退出"),
+                "a dead Agent process forces a restart and names the exited process");
+            Check(!sessionAlive(), "the processor rejects the dead Agent session");
+            // SetTasker() releases the Agents together with the old tasker. The tasker release must
+            // reach its controller and resource instead of failing on an already disposed Process.
+            Check(BoundedCleanup(contexts, tasker) && tasker.IsInvalid && controller.IsInvalid && resource.IsInvalid,
+                "releasing a dead Agent with its tasker also releases the controller and resource");
+            return true;
+        }
+        finally
+        {
+            AgentHelper.KillAllAgents(contexts, tasker.IsInvalid ? null : tasker);
+            interfaceProperty.SetValue(null, previousInterface);
+            try { Directory.Delete(dir, true); } catch (IOException) { }
+        }
+    }
+
+    // Production uses the interface's timeout -1 (no SetTimeout), so a blocking LinkStop would hang forever.
+    private static bool BoundedCleanup(List<AgentContext> contexts, MaaTasker? tasker = null)
+    {
+        var cleanup = Task.Run(() => AgentHelper.KillAllAgents(contexts, tasker));
+        return cleanup.Wait(TimeSpan.FromSeconds(15)) && cleanup.Result && contexts.Count == 0;
+    }
+
+    private static AgentContext StartAgent(MaaTasker tasker, string python, string script, string dir)
+    {
+        var ctx = new AgentContext { Client = MaaAgentClient.Create("mfa-test-" + Guid.NewGuid().ToString("N")[..8], tasker) };
+        var linked = ctx.Client.LinkStart((id, _) =>
+        {
+            ctx.Process = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
+            {
+                FileName = python,
+                Arguments = $"-I -u \"{script}\" {id}",
+                WorkingDirectory = dir,
+                UseShellExecute = false,
+                CreateNoWindow = true,
+            });
+            return ctx.Process;
+        }, CancellationToken.None);
+        if (!linked) throw new Exception("FAIL: Python AgentServer did not link");
+        return ctx;
     }
 
     private static MaaWin32Controller CreateController(IntPtr hwnd) => new(hwnd,

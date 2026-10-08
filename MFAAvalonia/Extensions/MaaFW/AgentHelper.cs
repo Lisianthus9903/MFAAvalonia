@@ -845,8 +845,14 @@ public static class AgentHelper
                         LoggerHelper.Warning($"再次确认 Agent 进程退出状态失败：{ex.Message}");
                     }
                 }
-                try { agentProcess.Dispose(); }
-                catch (Exception e) { LoggerHelper.Warning($"释放 Agent 进程对象失败：{e.Message}"); }
+                // The MaaAgentClient that launched this process owns the Process object and disposes it
+                // when the client is released with its MaaTasker. Disposing it here first made that release
+                // throw ("No process is associated with this object") and skip the tasker's controller/resource.
+                if (agentClient == null)
+                {
+                    try { agentProcess.Dispose(); }
+                    catch (Exception e) { LoggerHelper.Warning($"释放 Agent 进程对象失败：{e.Message}"); }
+                }
             }
         }
         else
@@ -886,6 +892,89 @@ public static class AgentHelper
     public static bool HasAgentConfigs(List<MaaInterface.MaaInterfaceAgent>? agents)
     {
         return agents is { Count: > 0 } && agents.Any(a => a.ChildExec != null);
+    }
+
+    /// <summary>
+    /// 判断已启动的 Agent 会话能否被下一次任务复用。
+    /// 控制器保持连接时 MaaTasker 会被复用，但 Agent 进程可能已退出，或其 IPC 链路已失效：
+    /// 空闲期间实时画面的截图事件以 fire-and-forget 方式发给 Agent，回包只在任务运行时被读取，
+    /// 管道写满后 MaaAgentClientAlive 永久返回 false（server is not alive），而 Python 进程仍在运行。
+    /// 返回 false 时调用方必须重建 Tasker 并重新启动 Agent。
+    /// </summary>
+    public static bool IsAgentSessionReusable(List<MaaInterface.MaaInterfaceAgent>? agentConfigs, bool agentStarted,
+        List<AgentContext> contexts, out string reason)
+    {
+        reason = string.Empty;
+        if (!HasAgentConfigs(agentConfigs))
+            return true;
+
+        AgentContext[] snapshot;
+        lock (contexts)
+            snapshot = contexts.ToArray();
+
+        if (!agentStarted || snapshot.Length == 0)
+        {
+            reason = "Agent 尚未启动";
+            return false;
+        }
+
+        foreach (var ctx in snapshot)
+        {
+            if (!IsAgentAlive(ctx, out reason))
+                return false;
+        }
+        return true;
+    }
+
+    private static bool IsAgentAlive(AgentContext ctx, out string reason)
+    {
+        var client = ctx.Client;
+        if (client == null)
+        {
+            reason = "AgentClient 已释放";
+            return false;
+        }
+
+        // Platform sessions (Android) have no local Process; the client state is authoritative there.
+        if (ctx.PlatformSession == null)
+        {
+            var process = ctx.Process;
+            try
+            {
+                if (process == null || process.HasExited)
+                {
+                    reason = "Agent 进程已退出";
+                    return false;
+                }
+            }
+            catch (Exception ex) when (ex is InvalidOperationException or ObjectDisposedException)
+            {
+                reason = $"Agent 进程状态不可用：{ex.Message}";
+                return false;
+            }
+        }
+
+        try
+        {
+            if (client.IsInvalid || !client.IsConnected)
+            {
+                reason = "AgentClient 未连接";
+                return false;
+            }
+            if (!client.IsAlive)
+            {
+                reason = "Agent 服务端无响应（server is not alive）";
+                return false;
+            }
+        }
+        catch (ObjectDisposedException)
+        {
+            reason = "AgentClient 已释放";
+            return false;
+        }
+
+        reason = string.Empty;
+        return true;
     }
 
     #region 内部辅助方法

@@ -962,6 +962,15 @@ public class MaaProcessor
         return task.Result;
     }
 
+    private bool IsAgentSessionAlive()
+    {
+        if (AgentHelper.IsAgentSessionReusable(Interface?.Agent, _agentStarted, _agentContexts, out var reason))
+            return true;
+
+        LoggerHelper.Warning($"Agent 已失效，将重建任务执行器并重新启动 Agent：{reason}");
+        return false;
+    }
+
     private bool HasReusableMainTasker()
     {
         var tasker = MaaTasker;
@@ -4096,7 +4105,13 @@ public class MaaProcessor
 
             if (ViewModel?.IsConnected == true && MaaTasker?.Controller?.IsConnected == true)
             {
-                return;
+                if (IsAgentSessionAlive())
+                    return;
+
+                // The controller is still connected, but the Agent behind this tasker is gone.
+                // Release both so the connection below creates a new tasker and starts the Agent again.
+                // Checked only on task start/reconnect: live-view probes must not restart the Agent.
+                SetTasker();
             }
 
             if (ViewModel?.IsConnected == true && MaaTasker?.Controller?.IsConnected != true)
