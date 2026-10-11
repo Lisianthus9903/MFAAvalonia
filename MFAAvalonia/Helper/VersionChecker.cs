@@ -15,7 +15,6 @@ using MFAAvalonia.Views.UserControls;
 using MFAAvalonia.Views.Windows;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
-using Semver;
 using SharpCompress.Archives;
 using SukiUI.Controls;
 using SukiUI.Dialogs;
@@ -33,7 +32,6 @@ using System.Net.Http;
 using System.Net.Http.Headers;
 using System.Net.Security;
 using System.Net.Sockets;
-using System.Numerics;
 using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Security;
@@ -3189,8 +3187,8 @@ public static class VersionChecker
             return false;
         try
         {
-            var normalizedLatest = ParseAndNormalizeVersion(latestVersion);
-            var normalizedLocal = ParseAndNormalizeVersion(localVersion);
+            var normalizedLatest = ReleaseVersion.Parse(latestVersion);
+            var normalizedLocal = ReleaseVersion.Parse(localVersion);
             return normalizedLatest.ComparePrecedenceTo(normalizedLocal) > 0;
         }
         catch (Exception ex)
@@ -3198,27 +3196,6 @@ public static class VersionChecker
             LoggerHelper.Error($"比较版本号失败：latest={latestVersion}, local={localVersion}, reason={ex.Message}", ex);
             return false;
         }
-    }
-
-    private static SemVersion ParseAndNormalizeVersion(string version)
-    {
-        if (!version.StartsWith("v", StringComparison.OrdinalIgnoreCase))
-            version = $"v{version}";
-        var pattern = @"^[vV]?(?<major>\d+)(\.(?<minor>\d+))?(\.(?<patch>\d+))?(?:-(?<prerelease>[0-9a-zA-Z\-\.]+))?(?:\+(?<build>[0-9a-zA-Z\-\.]+))?$";
-        var match = Regex.Match(version.Trim(), pattern);
-
-        var major = match.Groups["major"].Success ? int.Parse(match.Groups["major"].Value) : 0;
-        var minor = match.Groups["minor"].Success ? int.Parse(match.Groups["minor"].Value) : 0;
-        var patch = match.Groups["patch"].Success ? int.Parse(match.Groups["patch"].Value) : 0;
-        var prerelease = match.Groups["prerelease"].Success
-            ? match.Groups["prerelease"].Value.Split('.')
-            : null;
-
-        var build = match.Groups["build"].Success
-            ? match.Groups["build"].Value.Split('.')
-            : null;
-
-        return new SemVersion(new BigInteger(major), new BigInteger(minor), new BigInteger(patch), prerelease, build);
     }
 
     async private static Task<(bool, string)> DownloadFileAsync(
@@ -3496,14 +3473,9 @@ public static class VersionChecker
         if (string.IsNullOrWhiteSpace(leftVersion) || string.IsNullOrWhiteSpace(rightVersion))
             return false;
 
-        const string versionPattern = @"^[vV]?\d+(?:\.\d+)?(?:\.\d+)?(?:-[0-9a-zA-Z\-\.]+)?(?:\+[0-9a-zA-Z\-\.]+)?$";
-        if (!Regex.IsMatch(leftVersion.Trim(), versionPattern)
-            || !Regex.IsMatch(rightVersion.Trim(), versionPattern))
-            return false;
-
         try
         {
-            comparison = ParseAndNormalizeVersion(leftVersion).ComparePrecedenceTo(ParseAndNormalizeVersion(rightVersion));
+            comparison = ReleaseVersion.Parse(leftVersion).ComparePrecedenceTo(ReleaseVersion.Parse(rightVersion));
             return true;
         }
         catch (Exception ex)
