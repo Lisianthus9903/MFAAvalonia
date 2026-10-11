@@ -34,6 +34,16 @@ public static class ScriptRunner
         if (string.IsNullOrWhiteSpace(scriptPath))
             return;
 
+        // 前置脚本常被误填成游戏本体（与启动程序相同），程序已在运行时再启动会触发“多个实例”报错
+        SplitScriptPath(scriptPath, out var scriptFile, out _);
+        if (scriptType == "Prescript"
+            && scriptFile.EndsWith(".exe", StringComparison.OrdinalIgnoreCase)
+            && IsExecutableRunning(scriptFile))
+        {
+            LoggerHelper.Warning($"已跳过前置脚本，因为该程序已在运行：{scriptFile}");
+            return;
+        }
+
         if (!await ExecuteScriptAsync(scriptPath))
         {
             LoggerHelper.Error($"执行脚本失败：脚本类型={scriptType}，脚本路径={scriptPath}");
@@ -52,20 +62,7 @@ public static class ScriptRunner
             if (string.IsNullOrWhiteSpace(scriptPath))
                 return false;
 
-            string fileName;
-            string arguments;
-
-            if (scriptPath.StartsWith('\"'))
-            {
-                var parts = scriptPath.Split("\"", 3);
-                fileName = parts[1];
-                arguments = parts.Length > 2 ? parts[2] : string.Empty;
-            }
-            else
-            {
-                fileName = scriptPath;
-                arguments = string.Empty;
-            }
+            SplitScriptPath(scriptPath, out var fileName, out var arguments);
 
             bool createNoWindow = arguments.Contains("-noWindow");
             bool minimized = arguments.Contains("-minimized");
@@ -102,6 +99,58 @@ public static class ScriptRunner
             LoggerHelper.Error($"脚本执行异常：脚本路径={scriptPath}，原因={ex.Message}", ex);
             return false;
         }
+    }
+
+    /// <summary>
+    /// 拆分脚本配置为文件路径和参数（带引号时引号内为路径）
+    /// </summary>
+    internal static void SplitScriptPath(string scriptPath, out string fileName, out string arguments)
+    {
+        if (scriptPath.StartsWith('\"'))
+        {
+            var parts = scriptPath.Split("\"", 3);
+            fileName = parts[1];
+            arguments = parts.Length > 2 ? parts[2] : string.Empty;
+        }
+        else
+        {
+            fileName = scriptPath;
+            arguments = string.Empty;
+        }
+    }
+
+    /// <summary>
+    /// 是否已有同一路径的程序在运行。读不到进程路径（权限不足）时按同名进程视为在运行。
+    /// </summary>
+    internal static bool IsExecutableRunning(string exePath)
+    {
+        string fullPath;
+        try
+        {
+            fullPath = Path.GetFullPath(exePath);
+        }
+        catch
+        {
+            return false;
+        }
+
+        foreach (var process in Process.GetProcessesByName(Path.GetFileNameWithoutExtension(fullPath)))
+        {
+            try
+            {
+                if (string.Equals(process.MainModule?.FileName, fullPath, StringComparison.OrdinalIgnoreCase))
+                    return true;
+            }
+            catch
+            {
+                return true;
+            }
+            finally
+            {
+                process.Dispose();
+            }
+        }
+        return false;
     }
 
     /// <summary>

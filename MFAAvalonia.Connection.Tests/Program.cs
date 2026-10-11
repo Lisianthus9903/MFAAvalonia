@@ -123,6 +123,7 @@ internal static class Program
             }
 
             var agentServerChecks = RunAgentChecks(processor, hwnd);
+            RunDuplicateLaunchChecks();
 
             var report = new { passed = Passed.Count, checks = Passed,
                 nativeVersion = NativeBindingContext.LibraryVersion, gameInput = false,
@@ -136,6 +137,25 @@ internal static class Program
         {
             DestroyFixture(ref hwnd);
         }
+    }
+
+    // A prescript pointing at the game executable must not start a second game instance
+    // ("multiple game instances" error) when the game is already running.
+    private static void RunDuplicateLaunchChecks()
+    {
+        var runner = typeof(ScriptRunner);
+        var isRunning = runner.GetMethod("IsExecutableRunning", BindingFlags.Static | BindingFlags.NonPublic)!
+            .CreateDelegate<Func<string, bool>>();
+        var self = Environment.ProcessPath!;
+        Check(isRunning(self), "the running executable is detected by its full path");
+        Check(!isRunning(Path.Combine(Path.GetTempPath(), "mfa-not-running-" + Guid.NewGuid().ToString("N") + ".exe")),
+            "an executable that is not running is not reported as running");
+
+        var split = runner.GetMethod("SplitScriptPath", BindingFlags.Static | BindingFlags.NonPublic)!;
+        var parts = new object?[] { "\"C:\\Games\\My Game\\Game.exe\" -minimized", null, null };
+        split.Invoke(null, parts);
+        Check((string)parts[1]! == "C:\\Games\\My Game\\Game.exe" && ((string)parts[2]!).Trim() == "-minimized",
+            "a quoted script path is split into file and arguments");
     }
 
     // Agent session reuse after a manual stop. The production decision is driven by a real

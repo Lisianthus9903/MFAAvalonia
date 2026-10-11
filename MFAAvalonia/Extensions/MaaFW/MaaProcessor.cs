@@ -4881,13 +4881,14 @@ public class MaaProcessor
         }
         else
         {
+            // 模拟器带多开参数时需要再次启动以拉起指定实例；PC 游戏再启动一次会触发“多个实例”报错
             if (!string.IsNullOrWhiteSpace(InstanceConfiguration.GetValue(ConfigurationKeys.EmulatorConfig, string.Empty)))
             {
                 startInfo.Arguments = InstanceConfiguration.GetValue(ConfigurationKeys.EmulatorConfig, string.Empty);
                 _softwareProcess = Process.Start(startInfo);
             }
             else
-                _softwareProcess = Process.Start(startInfo);
+                LoggerHelper.Info($"程序已在运行，跳过重复启动：{processName}");
         }
 
         await WaitForStartupConnectionWindowAsync(waitTimeInSeconds, token);
