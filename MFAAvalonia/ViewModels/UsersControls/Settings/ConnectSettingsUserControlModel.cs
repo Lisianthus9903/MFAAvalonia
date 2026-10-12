@@ -1,4 +1,4 @@
-﻿using CommunityToolkit.Mvvm.ComponentModel;
+using CommunityToolkit.Mvvm.ComponentModel;
 using MaaFramework.Binding;
 using MFAAvalonia.Configuration;
 using MFAAvalonia.Extensions.MaaFW;
@@ -44,10 +44,10 @@ public partial class ConnectSettingsUserControlModel : ViewModelBase
                 new UniversalEnumConverter<Win32ScreencapMethods>());
             Win32ControlMouseType = config.GetValue(ConfigurationKeys.Win32ControlMouseType,
                 Win32InputMethod.SendMessage, Win32InputMethod.None,
-                new UniversalEnumConverter<Win32InputMethod>());
+                new Win32InputMethodConverter());
             Win32ControlKeyboardType = config.GetValue(ConfigurationKeys.Win32ControlKeyboardType,
                 Win32InputMethod.SendMessage, Win32InputMethod.None,
-                new UniversalEnumConverter<Win32InputMethod>());
+                new Win32InputMethodConverter());
             MacOSControlScreenCapType = config.GetValue(ConfigurationKeys.MacOSControlScreenCapType,
                 MacOSScreencapMethod.ScreenCaptureKit, default(MacOSScreencapMethod), new UniversalEnumConverter<MacOSScreencapMethod>());
             MacOSControlInputType = config.GetValue(ConfigurationKeys.MacOSControlInputType,
@@ -161,6 +161,12 @@ public partial class ConnectSettingsUserControlModel : ViewModelBase
         Win32InputMethod.PostMessageWithCursorPos, Win32InputMethod.SendMessageWithWindowPos,
         Win32InputMethod.PostMessageWithWindowPos
     ];
+    // AnchoredTouch only implements mouse/touch input, not keyboard or wheel input.
+    public static ObservableCollection<Win32InputMethod> Win32ControlMouseInputTypes =>
+    [
+        .. Win32ControlInputTypes,
+        Win32InputMethodConverter.AnchoredTouch
+    ];
     public static ObservableCollection<MacOSScreencapMethod> MacOSControlScreenCapTypes =>
     [
         MacOSScreencapMethod.ScreenCaptureKit
@@ -182,9 +188,9 @@ public partial class ConnectSettingsUserControlModel : ViewModelBase
     [ObservableProperty] private Win32ScreencapMethods _win32ControlScreenCapType =
         ConfigurationManager.CurrentInstance.GetValue(ConfigurationKeys.Win32ControlScreenCapType, Win32ScreencapMethods.FramePool, Win32ScreencapMethods.None, new UniversalEnumConverter<Win32ScreencapMethods>());
     [ObservableProperty] private Win32InputMethod _win32ControlMouseType =
-        ConfigurationManager.CurrentInstance.GetValue(ConfigurationKeys.Win32ControlMouseType, Win32InputMethod.SendMessage, Win32InputMethod.None, new UniversalEnumConverter<Win32InputMethod>());
+        ConfigurationManager.CurrentInstance.GetValue(ConfigurationKeys.Win32ControlMouseType, Win32InputMethod.SendMessage, Win32InputMethod.None, new Win32InputMethodConverter());
     [ObservableProperty] private Win32InputMethod _win32ControlKeyboardType =
-        ConfigurationManager.CurrentInstance.GetValue(ConfigurationKeys.Win32ControlKeyboardType, Win32InputMethod.SendMessage, Win32InputMethod.None, new UniversalEnumConverter<Win32InputMethod>());
+        ConfigurationManager.CurrentInstance.GetValue(ConfigurationKeys.Win32ControlKeyboardType, Win32InputMethod.SendMessage, Win32InputMethod.None, new Win32InputMethodConverter());
     [ObservableProperty] private MacOSScreencapMethod _macOSControlScreenCapType =
         ConfigurationManager.CurrentInstance.GetValue(ConfigurationKeys.MacOSControlScreenCapType, MacOSScreencapMethod.ScreenCaptureKit, default(MacOSScreencapMethod), new UniversalEnumConverter<MacOSScreencapMethod>());
     [ObservableProperty] private MacOSInputMethod _macOSControlInputType =
@@ -215,7 +221,7 @@ public partial class ConnectSettingsUserControlModel : ViewModelBase
     partial void OnWin32ControlMouseTypeChanged(Win32InputMethod value)
     {
         if (IsSyncing) return;
-        HandlePropertyChanged(ConfigurationKeys.Win32ControlMouseType, value.ToString(), () => MaaProcessorManager.Instance.Current.SetTasker());
+        HandlePropertyChanged(ConfigurationKeys.Win32ControlMouseType, Win32InputMethodConverter.GetName(value), () => MaaProcessorManager.Instance.Current.SetTasker());
     }
 
     partial void OnWin32ControlKeyboardTypeChanged(Win32InputMethod value)

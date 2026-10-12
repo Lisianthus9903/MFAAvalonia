@@ -1,4 +1,4 @@
-﻿using Avalonia;
+using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.ApplicationLifetimes;
 using Avalonia.Input;
@@ -559,9 +559,9 @@ public static partial class Instances
                     connect.Win32ControlScreenCapType = ConfigurationManager.CurrentInstance.GetValue(ConfigurationKeys.Win32ControlScreenCapType, MaaFramework.Binding.Win32ScreencapMethods.FramePool, MaaFramework.Binding.Win32ScreencapMethods.None,
                         new Converters.UniversalEnumConverter<MaaFramework.Binding.Win32ScreencapMethods>());
                     connect.Win32ControlMouseType = ConfigurationManager.CurrentInstance.GetValue(ConfigurationKeys.Win32ControlMouseType, MaaFramework.Binding.Win32InputMethod.SendMessage, MaaFramework.Binding.Win32InputMethod.None,
-                        new Converters.UniversalEnumConverter<MaaFramework.Binding.Win32InputMethod>());
+                        new Converters.Win32InputMethodConverter());
                     connect.Win32ControlKeyboardType = ConfigurationManager.CurrentInstance.GetValue(ConfigurationKeys.Win32ControlKeyboardType, MaaFramework.Binding.Win32InputMethod.SendMessage, MaaFramework.Binding.Win32InputMethod.None,
-                        new Converters.UniversalEnumConverter<MaaFramework.Binding.Win32InputMethod>());
+                        new Converters.Win32InputMethodConverter());
                     connect.MacOSControlScreenCapType = ConfigurationManager.CurrentInstance.GetValue(ConfigurationKeys.MacOSControlScreenCapType, MaaFramework.Binding.MacOSScreencapMethod.ScreenCaptureKit,
                         default(MaaFramework.Binding.MacOSScreencapMethod), new Converters.UniversalEnumConverter<MaaFramework.Binding.MacOSScreencapMethod>());
                     connect.MacOSControlInputType = ConfigurationManager.CurrentInstance.GetValue(ConfigurationKeys.MacOSControlInputType, MaaFramework.Binding.MacOSInputMethod.GlobalEvent,

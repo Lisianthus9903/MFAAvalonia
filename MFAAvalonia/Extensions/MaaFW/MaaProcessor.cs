@@ -1,4 +1,4 @@
-﻿using Avalonia.Controls;
+using Avalonia.Controls;
 using Avalonia.Controls.Notifications;
 using Avalonia.Media;
 using MaaFramework.Binding;
@@ -3144,14 +3144,14 @@ public class MaaProcessor
     {
         return InstanceConfiguration.GetValue(ConfigurationKeys.Win32ControlMouseType,
             Win32InputMethod.SendMessage, Win32InputMethod.None,
-            new UniversalEnumConverter<Win32InputMethod>());
+            new Win32InputMethodConverter());
     }
 
     private Win32InputMethod ConfigureWin32KeyboardInputTypes()
     {
         return InstanceConfiguration.GetValue(ConfigurationKeys.Win32ControlKeyboardType,
             Win32InputMethod.SendMessage, Win32InputMethod.None,
-            new UniversalEnumConverter<Win32InputMethod>());
+            new Win32InputMethodConverter());
     }
     private bool FirstTask = true;
     public const string NEW_SEPARATOR = "<|||>";

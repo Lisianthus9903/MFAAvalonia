@@ -958,6 +958,22 @@ public static class VersionChecker
         }
 
         var containsCoreApplicationFiles = ContainsCoreApplicationFiles(originPath);
+        if (OperatingSystem.IsWindows())
+        {
+            var runtimeRejection = RuntimeUpdateGuard.GetRejectionReason(originPath, AppPaths.InstallRoot,
+                RuntimeInformation.ProcessArchitecture == Architecture.Arm64 ? "win-arm64" : "win-x64");
+            if (!string.IsNullOrEmpty(runtimeRejection))
+            {
+                LoggerHelper.Warning(runtimeRejection);
+                Dismiss(sukiToast);
+                var message = LanguageHelper.CurrentLanguage.Equals("ko-KR", StringComparison.OrdinalIgnoreCase)
+                    ? "업데이트 패키지의 MaaFramework가 설치된 버전보다 낮거나 GUI·Python 버전이 일치하지 않아 적용을 중단했습니다.\n" + runtimeRejection
+                    : runtimeRejection;
+                ToastHelper.Warn(LangKeys.Warning.ToLocalization(), message, -1);
+                Instances.RootViewModel.SetUpdating(false);
+                return;
+            }
+        }
         if (containsCoreApplicationFiles)
         {
             LoggerHelper.Warning($"更新包包含核心程序文件，将按二合一路径处理安装目录与数据目录：目录={originPath}");

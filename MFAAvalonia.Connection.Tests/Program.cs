@@ -5,6 +5,11 @@ using System.Text.Json;
 using MaaFramework.Binding;
 using MFAAvalonia;
 using MFAAvalonia.Extensions.MaaFW;
+using MFAAvalonia.Configuration;
+using MFAAvalonia.Helper.Converters;
+using MFAAvalonia.ViewModels.Pages;
+using MFAAvalonia.ViewModels.UsersControls.Settings;
+using JsonConvert = Newtonsoft.Json.JsonConvert;
 
 internal static class Program
 {
@@ -43,6 +48,8 @@ internal static class Program
 
         try
         {
+            RunInputMethodChecks(hwnd);
+            RunRuntimePackageChecks();
             try
             {
                 using var invalid = CreateController(IntPtr.Zero);
@@ -137,6 +144,100 @@ internal static class Program
         {
             DestroyFixture(ref hwnd);
         }
+    }
+
+    private static void RunRuntimePackageChecks()
+    {
+        var currentDll = Environment.GetEnvironmentVariable("MFA_TEST_CURRENT_RUNTIME");
+        var olderDll = Environment.GetEnvironmentVariable("MFA_TEST_OLDER_RUNTIME");
+        if (string.IsNullOrEmpty(currentDll) || string.IsNullOrEmpty(olderDll))
+            throw new InvalidOperationException("Set MFA_TEST_CURRENT_RUNTIME and MFA_TEST_OLDER_RUNTIME to real MaaFramework DLLs.");
+        var guard = typeof(MaaProcessor).Assembly.GetType("MFAAvalonia.Helper.RuntimeUpdateGuard", true)!;
+        var reject = guard.GetMethod("GetRejectionReason")!.CreateDelegate<Func<string, string, string, string>>();
+        var root = Path.Combine(Path.GetTempPath(), "mfa-runtime-guard-" + Guid.NewGuid().ToString("N"));
+        var installed = Path.Combine(root, "installed");
+        var package = Path.Combine(root, "package");
+        var gui = Path.Combine("runtimes", "win-x64", "native", "MaaFramework.dll");
+        var python = Path.Combine("python", "Lib", "site-packages", "maa", "bin", "MaaFramework.dll");
+        void Put(string destination, string relative, string source)
+        {
+            var path = Path.Combine(destination, relative);
+            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+            File.Copy(source, path, true);
+        }
+        try
+        {
+            Directory.CreateDirectory(package);
+            Put(installed, gui, currentDll);
+            Put(installed, python, currentDll);
+            Check(reject(package, installed, "win-x64") == "", "resource-only packages remain accepted");
+            Put(package, gui, olderDll);
+            Put(package, python, olderDll);
+            Check(reject(package, installed, "win-x64").Contains("downgrade"), "a real older full package is rejected before file replacement");
+            Put(package, gui, currentDll);
+            Put(package, python, currentDll);
+            Check(reject(package, installed, "win-x64") == "", "a coherent same-version package remains accepted");
+            Put(installed, gui, olderDll);
+            Put(installed, python, olderDll);
+            Check(reject(package, installed, "win-x64") == "", "a coherent newer GUI and Python pair remains accepted");
+            File.Delete(Path.Combine(package, python));
+            Check(reject(package, installed, "win-x64").Contains("mismatch"), "a partial upgrade cannot mix GUI and Python native versions");
+            File.WriteAllText(Path.Combine(package, gui), "invalid runtime fixture");
+            Check(reject(package, installed, "win-x64").Contains("Cannot verify"), "an unidentifiable incoming runtime is rejected without execution");
+        }
+        finally
+        {
+            Directory.Delete(root, true);
+        }
+    }
+
+    private static void RunInputMethodChecks(IntPtr hwnd)
+    {
+        var converter = new Win32InputMethodConverter();
+        var anchored = Win32InputMethodConverter.AnchoredTouch;
+        Check((ulong)anchored == 1024, "AnchoredTouch uses the MaaDef.h v5.14.3 UInt64 ABI value");
+        Check(ConnectSettingsUserControlModel.Win32ControlMouseInputTypes.Contains(anchored),
+            "the mouse input dropdown includes AnchoredTouch");
+        Check(!ConnectSettingsUserControlModel.Win32ControlInputTypes.Contains(anchored),
+            "the keyboard input dropdown excludes mouse-only AnchoredTouch");
+        Check(ConnectSettingsUserControlModel.Win32ControlMouseInputTypes.Count ==
+              ConnectSettingsUserControlModel.Win32ControlInputTypes.Count + 1,
+            "all existing mouse and keyboard choices are retained");
+        Check((string)converter.Convert(anchored, typeof(string), null, System.Globalization.CultureInfo.InvariantCulture)
+              == "AnchoredTouch", "the dropdown displays AnchoredTouch instead of 1024");
+        Check(JsonConvert.SerializeObject(anchored, converter) == "\"AnchoredTouch\"",
+            "AnchoredTouch is saved by its canonical name");
+        foreach (var json in new[] { "\"AnchoredTouch\"", "\"anchoredtouch\"", "\"1024\"", "1024" })
+            Check(JsonConvert.DeserializeObject<Win32InputMethod>(json, converter) == anchored,
+                "AnchoredTouch loads from " + json);
+        foreach (var method in ConnectSettingsUserControlModel.Win32ControlInputTypes)
+            Check(JsonConvert.DeserializeObject<Win32InputMethod>(JsonConvert.SerializeObject(method, converter), converter) == method,
+                "existing input setting roundtrips: " + method);
+
+        var stored = JsonConvert.DeserializeObject<Dictionary<string, object>>(
+            "{\"Win32ControlMouseType\":\"AnchoredTouch\",\"Win32ControlKeyboardType\":\"SendMessageWithCursorPos\"}")!;
+        var config = new MFAConfiguration("Input regression", "input-regression", stored);
+        Check(config.GetValue(ConfigurationKeys.Win32ControlMouseType, Win32InputMethod.SendMessage,
+                  Win32InputMethod.None, converter) == anchored,
+            "the production configuration reader restores the saved mouse method");
+        Check(config.GetValue(ConfigurationKeys.Win32ControlKeyboardType, Win32InputMethod.SendMessage,
+                  Win32InputMethod.None, converter) == Win32InputMethod.SendMessageWithCursorPos,
+            "restoring AnchoredTouch leaves the existing keyboard method intact");
+        var instance = (InstanceConfiguration)RuntimeHelpers.GetUninitializedObject(typeof(InstanceConfiguration));
+        typeof(InstanceConfiguration).GetField("_config", BindingFlags.Instance | BindingFlags.NonPublic)!.SetValue(instance, stored);
+        Check(instance.GetValue(ConfigurationKeys.Win32ControlMouseType, Win32InputMethod.SendMessageWithCursorPos,
+                  Win32InputMethod.None, converter) == anchored,
+            "saved instance mouse input takes precedence over the interface default");
+        Check(instance.GetValue(ConfigurationKeys.Win32ControlKeyboardType, Win32InputMethod.SendMessage,
+                  Win32InputMethod.None, converter) == Win32InputMethod.SendMessageWithCursorPos,
+            "saved instance keyboard input takes precedence over the interface default");
+        var parse = typeof(TaskQueueViewModel).GetMethod("ParseWin32InputMethod", BindingFlags.NonPublic | BindingFlags.Static)!;
+        foreach (var value in new object[] { "AnchoredTouch", 1024L })
+            Check((Win32InputMethod)parse.Invoke(null, [value])! == anchored,
+                "interface input parsing accepts AnchoredTouch: " + value);
+        using var controller = new MaaWin32Controller(hwnd, Win32ScreencapMethods.GDI,
+            anchored, Win32InputMethod.SendMessage, (LinkOption)0, (CheckStatusOption)0);
+        Check(!controller.IsInvalid, "the stable C# binding creates a real native AnchoredTouch controller without input");
     }
 
     // A prescript pointing at the game executable must not start a second game instance

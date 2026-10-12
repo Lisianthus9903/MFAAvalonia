@@ -452,10 +452,10 @@ public partial class InstanceTabBarViewModel : ViewModelBase
                 new MFAAvalonia.Helper.Converters.UniversalEnumConverter<MaaFramework.Binding.Win32ScreencapMethods>());
             connect.Win32ControlMouseType = config.GetValue(MFAAvalonia.Configuration.ConfigurationKeys.Win32ControlMouseType,
                 MaaFramework.Binding.Win32InputMethod.SendMessage, MaaFramework.Binding.Win32InputMethod.None,
-                new MFAAvalonia.Helper.Converters.UniversalEnumConverter<MaaFramework.Binding.Win32InputMethod>());
+                new MFAAvalonia.Helper.Converters.Win32InputMethodConverter());
             connect.Win32ControlKeyboardType = config.GetValue(MFAAvalonia.Configuration.ConfigurationKeys.Win32ControlKeyboardType,
                 MaaFramework.Binding.Win32InputMethod.SendMessage, MaaFramework.Binding.Win32InputMethod.None,
-                new MFAAvalonia.Helper.Converters.UniversalEnumConverter<MaaFramework.Binding.Win32InputMethod>());
+                new MFAAvalonia.Helper.Converters.Win32InputMethodConverter());
             connect.MacOSControlScreenCapType = config.GetValue(MFAAvalonia.Configuration.ConfigurationKeys.MacOSControlScreenCapType,
                 MaaFramework.Binding.MacOSScreencapMethod.ScreenCaptureKit,
                 default(MaaFramework.Binding.MacOSScreencapMethod), new MFAAvalonia.Helper.Converters.UniversalEnumConverter<MaaFramework.Binding.MacOSScreencapMethod>());

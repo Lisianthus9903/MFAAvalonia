@@ -2440,14 +2440,18 @@ public partial class TaskQueueViewModel : ViewModelBase, IDisposable
             {
                 var parsed = ParseWin32InputMethod(mouse);
                 if (parsed != null)
-                    Instances.ConnectSettingsUserControlModel.Win32ControlMouseType = parsed.Value;
+                    Instances.ConnectSettingsUserControlModel.Win32ControlMouseType =
+                        Processor.InstanceConfiguration.GetValue(ConfigurationKeys.Win32ControlMouseType,
+                            parsed.Value, Win32InputMethod.None, new Win32InputMethodConverter());
             }
             var keyboard = controller.Win32?.Keyboard;
             if (keyboard != null)
             {
                 var parsed = ParseWin32InputMethod(keyboard);
                 if (parsed != null)
-                    Instances.ConnectSettingsUserControlModel.Win32ControlKeyboardType = parsed.Value;
+                    Instances.ConnectSettingsUserControlModel.Win32ControlKeyboardType =
+                        Processor.InstanceConfiguration.GetValue(ConfigurationKeys.Win32ControlKeyboardType,
+                            parsed.Value, Win32InputMethod.None, new Win32InputMethodConverter());
             }
             var input = controller.Win32?.Input;
             if (keyboard == null && mouse == null && input != null)
@@ -2455,8 +2459,12 @@ public partial class TaskQueueViewModel : ViewModelBase, IDisposable
                 var parsed = ParseWin32InputMethod(input);
                 if (parsed != null)
                 {
-                    Instances.ConnectSettingsUserControlModel.Win32ControlKeyboardType = parsed.Value;
-                    Instances.ConnectSettingsUserControlModel.Win32ControlMouseType = parsed.Value;
+                    Instances.ConnectSettingsUserControlModel.Win32ControlKeyboardType =
+                        Processor.InstanceConfiguration.GetValue(ConfigurationKeys.Win32ControlKeyboardType,
+                            parsed.Value, Win32InputMethod.None, new Win32InputMethodConverter());
+                    Instances.ConnectSettingsUserControlModel.Win32ControlMouseType =
+                        Processor.InstanceConfiguration.GetValue(ConfigurationKeys.Win32ControlMouseType,
+                            parsed.Value, Win32InputMethod.None, new Win32InputMethodConverter());
                 }
             }
         }
@@ -2472,7 +2480,7 @@ public partial class TaskQueueViewModel : ViewModelBase, IDisposable
         // 新版 string 格式（枚举名）
         if (value is string strValue)
         {
-            if (Enum.TryParse<Win32InputMethod>(strValue, ignoreCase: true, out var result))
+            if (Win32InputMethodConverter.TryParse(strValue, out var result))
                 return result;
             return null;
         }
@@ -2490,6 +2498,7 @@ public partial class TaskQueueViewModel : ViewModelBase, IDisposable
             64 => Win32InputMethod.PostMessageWithCursorPos,
             128 => Win32InputMethod.SendMessageWithWindowPos,
             256 => Win32InputMethod.PostMessageWithWindowPos,
+            1024 => Win32InputMethodConverter.AnchoredTouch,
             _ => null
         };
     }
