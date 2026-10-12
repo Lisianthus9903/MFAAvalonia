@@ -163,10 +163,14 @@ internal static class Program
     // sequence) and a Win32 controller on the off-screen fixture. No game input or GUI.
     private const string AgentScript = """
         import sys
+        import threading
         from maa.agent.agent_server import AgentServer
         AgentServer.start_up(sys.argv[-1])
         AgentServer.join()
         AgentServer.shut_down()
+        # Fixture only: keep the process alive after disconnecting, to verify that
+        # the production reuse guard checks the IPC link as well as process exit.
+        threading.Event().wait()
         """;
 
     private static bool RunAgentChecks(object processor, IntPtr hwnd)
@@ -216,25 +220,24 @@ internal static class Program
             contexts.Add(StartAgent(tasker, python, script, dir));
             Check(sessionAlive() && sessionAlive(), "a live Agent process with a connected client is reused across starts");
 
-            // 2. The reported case: the tasker stays idle after a stop while the live view keeps
-            //    screencapping. Controller events are sent fire-and-forget and their responses are
-            //    only drained inside a running task, so the IPC pipe fills up and the client reports
-            //    "server is not alive" although the Python process is still running.
+            // 2. MaaFramework 5.14.3 fixes the idle screencap response buildup. Keep this
+            //    regression as a positive check instead of requiring the old native bug.
             var agentProcess = contexts[0].Process!;
-            var deadline = DateTime.UtcNow.AddSeconds(90);
             var screencaps = 0;
-            while (contexts[0].Client!.IsAlive && DateTime.UtcNow < deadline)
+            while (contexts[0].Client!.IsAlive && screencaps < 10000)
             {
                 tasker.Controller.Screencap().Wait();
                 screencaps++;
             }
-            Console.Error.WriteLine($"idle screencaps until the Agent link stalled: {screencaps}");
-            Check(!agentProcess.HasExited && !sessionAlive(),
-                "idle screencaps stall the Agent link and force a restart although its process still runs");
+            Console.Error.WriteLine($"idle screencaps with a healthy Agent link: {screencaps}");
+            Check(screencaps == 10000 && !agentProcess.HasExited && sessionAlive(),
+                "10000 idle screencaps preserve the healthy Agent link on MaaFramework 5.14.3");
+            Check(contexts[0].Client!.LinkStop() && !agentProcess.HasExited && !sessionAlive(),
+                "a disconnected Agent link forces a restart even while its process still runs");
             // KillAllAgents disposes the context's Process object, so observe exit through a separate handle.
             using var observer = System.Diagnostics.Process.GetProcessById(agentProcess.Id);
             Check(BoundedCleanup(contexts) && observer.WaitForExit(5000),
-                "cleanup of a stalled Agent terminates its process without hanging");
+                "cleanup of a disconnected live Agent terminates its process without hanging");
 
             // 3. The Agent process itself died while the controller stayed connected.
             contexts.Add(StartAgent(tasker, python, script, dir));
