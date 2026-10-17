@@ -366,19 +366,9 @@ public static class LanguageHelper
 
     private static bool IsKorean(string langCode)
     {
-        string[] koreanPrefixes =
-        [
-            "ko",
-            "ko-kr"
-        ];
-        foreach (string prefix in koreanPrefixes)
-        {
-            if (langCode.Replace("_", "-").StartsWith(prefix))
-            {
-                return true;
-            }
-        }
-        return false;
+        // 只匹配 "ko" 或 "ko-*"，避免误匹配 "kok"（孔卡尼语）等以 ko 开头的其他语言
+        var code = langCode.Replace("_", "-");
+        return code == "ko" || code.StartsWith("ko-");
     }
 
     public class LanguageEventArgs(SupportedLanguage language) : EventArgs
